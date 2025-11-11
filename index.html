@@ -1,0 +1,716 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Micro:bit 3D 雙人立方體控制遊戲</title>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; background: #ffffff; margin: 0; color: black; }
+        #gameArea { width: 100vw; height: 65vh; position: relative; }
+
+        /* 控制區（分數、時間、按鈕、狀態）全部放在這裡 */
+        #bottomControls {
+            width: 100%;
+            padding: 12px 0;
+            background: rgba(255,255,255,0.95);
+            box-shadow: 0 -4px 12px rgba(0,0,0,0.15);
+            text-align: center;
+        }
+        #timer {
+            font-size: 24px;
+            margin: 8px 0;
+            color: #ff4500;
+            font-weight: bold;
+        }
+        #status {
+            color: #00008b;
+            margin: 10px 0;
+            font-size: 16px;
+        }
+        button {
+            padding: 10px 20px;
+            margin: 6px;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:hover { background: #45a049; }
+        button:disabled { background: #999; cursor: not-allowed; }
+
+        /* 手機時按鈕自動換行 */
+        .controls {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 8px;
+            margin: 10px 0;
+        }
+
+        #gameOver {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 30px;
+            color: red;
+            display: none;
+            z-index: 10;
+        }
+        #infoPanel { 
+            position: fixed; right: 20px; top: 120px; width: 280px;
+            background: rgba(255,255,255,0.95); padding: 15px;
+            border: 2px solid #333; border-radius: 10px;
+            font-size: 14px; z-index: 100;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+        }
+
+        /* 血量條樣式（保持原樣） */
+        .hpBarContainer {
+            position: absolute; width: 80px; height: 10px;
+            background: radial-gradient(circle at center, #444 0%, #222 70%, #111 100%);
+            border: 3px solid #666; border-radius: 15px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.5), inset 0 2px 4px rgba(255,255,255,0.1);
+            z-index: 5; display: none; overflow: hidden;
+        }
+        .hpBar { height: 100%; width: 100%; background: linear-gradient(90deg, #4CAF50 0%, #8BC34A 100%);
+            border-radius: 12px; transition: width 0.3s ease; position: relative;}
+        .hpBar::after {
+            content: ''; position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+            background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.4) 50%, transparent 100%);
+            animation: shine 2s infinite; border-radius: 12px;
+        }
+        @keyframes shine { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
+        .hpText {
+            position: absolute; top: -28px; left: 50%; transform: translateX(-50%);
+            font-weight: bold; color: white; text-shadow: 2px 2px 4px black; font-size: 14px;
+        }
+        .player1 { border-color: #ff0000; }
+        .player2 { border-color: #0000ff; }
+    </style>
+</head>
+<body>
+    <h1>Micro:bit 3D 雙人立方體控制遊戲</h1>
+    <p>兩位玩家各自連接一個 micro:bit，傾斜控制紅色/藍色立方體，共同存活 45 秒即勝利！<br>
+       也可以用鍵盤 WASD（紅色玩家）+ IJKL（藍色玩家）測試。<br>
+       <span style="color:red;">小心綠色邊緣！</span></p>
+
+    <div id="gameArea">
+        <div id="hpBarContainer1" class="hpBarContainer player1">
+            <div class="hpText">P1 100/100</div>
+            <div id="hpBar1" class="hpBar"></div>
+        </div>
+        <div id="hpBarContainer2" class="hpBarContainer player2">
+            <div class="hpText">P2 100/100</div>
+            <div id="hpBar2" class="hpBar"></div>
+        </div>
+        <div id="gameOver">Game Over!</div>
+    </div>
+
+    <!-- 這裡把所有控制項包在一起，會緊貼在遊戲區下方 -->
+    <div id="bottomControls">
+        <div id="timer">剩餘時間: 45</div>
+
+        <div class="controls">
+            <button id="startBtn">開始遊戲</button>
+            <button id="pauseBtn" disabled>暫停遊戲</button>
+            <button id="connectBtn1">連接 Player1 micro:bit</button>
+            <button id="disconnectBtn1" disabled>斷開 P1</button>
+            <button id="connectBtn2">連接 Player2 micro:bit</button>
+            <button id="disconnectBtn2" disabled>斷開 P2</button>
+        </div>
+
+        <div id="status">狀態：未連接</div>
+    </div>
+
+    <div id="infoPanel">
+        <h3>雙人規則</h3>
+        <div><b>紅色立方體</b>：WASD 或 micro:bit #1</div>
+        <div><b>藍色立方體</b>：IJKL 或 micro:bit #2</div>
+        <div><b>任意一人死亡 → 遊戲結束</b></div>
+        <div><b>兩人都存活 45 秒 → 勝利！</b></div>
+    </div>
+
+    <script type="module">
+    import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
+
+    // 全域變數
+    let device1 = null, device2 = null;
+    let gameRunning = false, gameOver = false;
+    let timeLeft = 45, timerInterval = null;
+    let scene, camera, renderer;
+
+    const maxSpeed = 0.05;
+    const coneSpeed = 0.025;
+    const yellowSpeed = 0.03;
+    const sphereSpeed = 0.15;
+    const OBJECT_SCALE = 0.4, CUBE_SCALE = 0.6, HITBOX_SCALE = 0.6;
+    const SAFE_ZONE = 5.8;
+    const MAX_ZONE = 7.0;
+    const GENERATE_EDGE = 8.0;
+    const PLANE_SIZE = 12;
+
+    const players = [
+        { color: 0xff0000, cube: null, hitbox: null, hp: 100, dx: 0, dz: 0, hpBar: null, hpContainer: null, hpText: null, damageInt: null, recoverInt: null, leftEdgeTime: 0 },
+        { color: 0x0000ff, cube: null, hitbox: null, hp: 100, dx: 0, dz: 0, hpBar: null, hpContainer: null, hpText: null, damageInt: null, recoverInt: null, leftEdgeTime: 0 }
+    ];
+
+    let obstacles = [], yellowObstacles = [], sphereObstacles = [], lines = [];
+    let obstacleHitboxes = [], yellowHitboxes = [], sphereHitboxes = [];
+
+    const keys = { i: false, k: false, j: false, l: false,
+                   w: false, s: false, a: false, d: false };
+
+    // DOM 元素
+    const timerEl = document.getElementById('timer');
+    const statusEl = document.getElementById('status');
+    const gameOverEl = document.getElementById('gameOver');
+    const startBtn = document.getElementById('startBtn');
+    const pauseBtn = document.getElementById('pauseBtn');
+    const connectBtn1 = document.getElementById('connectBtn1');
+    const disconnectBtn1 = document.getElementById('disconnectBtn1');
+    const connectBtn2 = document.getElementById('connectBtn2');
+    const disconnectBtn2 = document.getElementById('disconnectBtn2');
+
+    players[0].hpBar = document.getElementById('hpBar1');
+    players[1].hpBar = document.getElementById('hpBar2');
+    players[0].hpContainer = document.getElementById('hpBarContainer1');
+    players[1].hpContainer = document.getElementById('hpBarContainer2');
+    players[0].hpText = players[0].hpContainer.querySelector('.hpText');
+    players[1].hpText = players[1].hpContainer.querySelector('.hpText');
+
+    const UART_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+    const UART_TX_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
+    const UART_RX_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
+
+    // 更新血量條
+    function updateHpBar(player) {
+        const percent = (player.hp / 100) * 100;
+        player.hpBar.style.width = percent + '%';
+        player.hpText.textContent = `P${players.indexOf(player)+1} ${player.hp}/100`;
+        if (percent > 60) player.hpBar.style.background = 'linear-gradient(90deg, #4CAF50 0%, #8BC34A 100%)';
+        else if (percent > 30) player.hpBar.style.background = 'linear-gradient(90deg, #FFEB3B 0%, #FFC107 100%)';
+        else player.hpBar.style.background = 'linear-gradient(90deg, #F44336 0%, #D32F2F 100%)';
+    }
+
+    // 扣血/回血
+    function startDamage(player) {
+        if (player.damageInt) return;
+        player.damageInt = setInterval(() => {
+            player.hp = Math.max(0, player.hp - 15);
+            updateHpBar(player);
+            if (player.hp <= 0) endGame(`Player ${players.indexOf(player)+1} 血量耗盡！`);
+        }, 500);
+    }
+    function startRecover(player) {
+        if (player.recoverInt) return;
+        player.recoverInt = setInterval(() => {
+            player.hp = Math.min(100, player.hp + 5);
+            updateHpBar(player);
+        }, 1000);
+    }
+    function stopDamage(player) { if (player.damageInt) { clearInterval(player.damageInt); player.damageInt = null; } }
+    function stopRecover(player) { if (player.recoverInt) { clearInterval(player.recoverInt); player.recoverInt = null; } }
+
+    // 初始化 3D
+    function init3D() {
+        scene = new THREE.Scene();
+        scene.background = new THREE.Color(0xffffff);
+        camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+        
+        renderer = new THREE.WebGLRenderer({ antialias: true });
+        const gameArea = document.getElementById('gameArea');
+        renderer.setSize(gameArea.clientWidth, gameArea.clientHeight);
+        camera.aspect = gameArea.clientWidth / gameArea.clientHeight;
+        camera.updateProjectionMatrix();
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        document.getElementById('gameArea').appendChild(renderer.domElement);
+
+        const light = new THREE.DirectionalLight(0xffffff, 1.2);
+        light.position.set(0, 20, 0);
+        light.castShadow = true;
+        light.shadow.mapSize.width = 2048;
+        light.shadow.mapSize.height = 2048;
+        scene.add(light);
+        scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+
+        const plane = new THREE.Mesh(
+            new THREE.PlaneGeometry(PLANE_SIZE, PLANE_SIZE),
+            new THREE.MeshStandardMaterial({ color: 0xD4D4D4 })
+        );
+        plane.rotation.x = -Math.PI / 2;
+        plane.position.y = -0.25;
+        plane.receiveShadow = true;
+        scene.add(plane);
+
+        camera.position.set(0, 11, 5);
+        camera.lookAt(0, -4, 0);
+
+        players.forEach((p, i) => {
+            const geometry = new THREE.BoxGeometry(0.5, 0.5, 0.5);
+            const material = new THREE.MeshStandardMaterial({ 
+                color: p.color, 
+                metalness: 0.3,
+                roughness: 0.4
+            });
+            p.cube = new THREE.Mesh(geometry, material);
+            p.cube.castShadow = true;
+            p.cube.receiveShadow = true;
+            p.cube.scale.set(CUBE_SCALE, CUBE_SCALE, CUBE_SCALE);
+            p.cube.position.set((i === 0 ? -1.5 : 1.5), 0, 0);
+            scene.add(p.cube);
+
+            const scaled = 0.5 * CUBE_SCALE * HITBOX_SCALE;
+            const hitboxGeo = new THREE.BoxGeometry(scaled, scaled, scaled);
+            const hitboxMat = new THREE.MeshBasicMaterial({ 
+                color: p.color, 
+                transparent: true, 
+                opacity: 0.3, 
+                wireframe: true 
+            });
+            p.hitbox = new THREE.Mesh(hitboxGeo, hitboxMat);
+            p.hitbox.position.copy(p.cube.position);
+            scene.add(p.hitbox);
+
+            updateHpBar(p);
+        });
+
+        // 新增：處理視窗大小變化
+        window.addEventListener('resize', () => {
+            const gameArea = document.getElementById('gameArea');
+            camera.aspect = gameArea.clientWidth / gameArea.clientHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(gameArea.clientWidth, gameArea.clientHeight);
+        });
+
+        animate();
+    }
+
+    // 動畫迴圈
+    function animate() {
+        requestAnimationFrame(animate);
+        if (gameRunning && !gameOver) {
+            updatePlayers();
+            updateObstacles();
+            updateYellowObstacles();
+            updateSphereObstacles();
+            updateHpBarPositions();
+            checkEdgeDamage();
+        }
+        renderer.render(scene, camera);
+    }
+
+    // 更新玩家
+    function updatePlayers() {
+        let kdx1 = 0, kdz1 = 0;
+        if (keys.a) kdx1 -= maxSpeed;
+        if (keys.d) kdx1 += maxSpeed;
+        if (keys.w) kdz1 -= maxSpeed;
+        if (keys.s) kdz1 += maxSpeed;
+
+        let kdx2 = 0, kdz2 = 0;
+        if (keys.j) kdx2 -= maxSpeed;
+        if (keys.l) kdx2 += maxSpeed;
+        if (keys.i) kdz2 -= maxSpeed;
+        if (keys.k) kdz2 += maxSpeed;
+
+        players[0].cube.position.x += players[0].dx + kdx1;
+        players[0].cube.position.z += players[0].dz + kdz1;
+        players[1].cube.position.x += players[1].dx + kdx2;
+        players[1].cube.position.z += players[1].dz + kdz2;
+
+        players.forEach(p => {
+            p.hitbox.position.copy(p.cube.position);
+            p.cube.position.x = Math.max(-MAX_ZONE, Math.min(MAX_ZONE, p.cube.position.x));
+            p.cube.position.z = Math.max(-MAX_ZONE, Math.min(MAX_ZONE, p.cube.position.z));
+        });
+    }
+
+    // 血量條跟隨
+    function updateHpBarPositions() {
+        players.forEach(p => {
+            const pos = new THREE.Vector3();
+            pos.copy(p.cube.position);
+            pos.y += 1.0;
+            pos.project(camera);
+            const x = (pos.x * 0.5 + 0.5) * renderer.domElement.clientWidth;
+            const y = -(pos.y * 0.5 - 0.5) * renderer.domElement.clientHeight;
+            p.hpContainer.style.left = x + 'px';
+            p.hpContainer.style.top = y + 'px';
+            p.hpContainer.style.display = 'block';
+        });
+    }
+
+    // 邊緣扣血
+    function checkEdgeDamage() {
+        players.forEach(p => {
+            const out = Math.abs(p.cube.position.x) > SAFE_ZONE || Math.abs(p.cube.position.z) > SAFE_ZONE;
+            if (out) {
+                stopRecover(p);
+                p.leftEdgeTime = Date.now();
+                startDamage(p);
+            } else {
+                stopDamage(p);
+                if (Date.now() - p.leftEdgeTime > 2000) startRecover(p);
+            }
+        });
+    }
+
+    // 障礙物生成
+    function createObstacle() {
+        if (!gameRunning || gameOver) return;
+        for (let i = 0; i < 3; i++) {
+            setTimeout(() => {
+                if (!gameRunning || gameOver) return;
+                const geometry = new THREE.ConeGeometry(0.3, 0.8, 8);
+                const material = new THREE.MeshStandardMaterial({ color: 0x80FFF8 });
+                const cone = new THREE.Mesh(geometry, material);
+                cone.castShadow = true;
+                cone.receiveShadow = true;
+                cone.scale.set(OBJECT_SCALE, OBJECT_SCALE, OBJECT_SCALE);
+                const direction = Math.floor(Math.random() * 4);
+                cone.userData = { dx: 0, dz: 0 };
+                const rand = Math.random() * PLANE_SIZE - (PLANE_SIZE / 2);
+                switch (direction) {
+                    case 0: cone.position.set(-GENERATE_EDGE, 0, rand); cone.userData.dx = coneSpeed; break;
+                    case 1: cone.position.set(GENERATE_EDGE, 0, rand); cone.userData.dx = -coneSpeed; break;
+                    case 2: cone.position.set(rand, 0, GENERATE_EDGE); cone.userData.dz = -coneSpeed; break;
+                    case 3: cone.position.set(rand, 0, -GENERATE_EDGE); cone.userData.dz = coneSpeed; break;
+                }
+                scene.add(cone);
+                obstacles.push(cone);
+                const hitbox = createHitbox(cone, 0x80FFF8);
+                scene.add(hitbox);
+                obstacleHitboxes.push(hitbox);
+            }, i * 333);
+        }
+    }
+
+    function createYellowObstacle() {
+        if (!gameRunning || gameOver || timeLeft > 30) return;
+        for (let i = 0; i < 2; i++) {
+            setTimeout(() => {
+                if (!gameRunning || gameOver) return;
+                const geometry = new THREE.CylinderGeometry(0.3, 0.3, 0.6, 8);
+                const material = new THREE.MeshStandardMaterial({ color: 0xffff00 });
+                const yellow = new THREE.Mesh(geometry, material);
+                yellow.castShadow = true;
+                yellow.scale.set(OBJECT_SCALE, OBJECT_SCALE, OBJECT_SCALE);
+                const direction = Math.floor(Math.random() * 4);
+                yellow.userData = { dx: 0, dz: 0 };
+                const rand = Math.random() * PLANE_SIZE - (PLANE_SIZE / 2);
+                switch (direction) {
+                    case 0: yellow.position.set(-GENERATE_EDGE, 0, rand); yellow.userData.dx = yellowSpeed; break;
+                    case 1: yellow.position.set(GENERATE_EDGE, 0, rand); yellow.userData.dx = -yellowSpeed; break;
+                    case 2: yellow.position.set(rand, 0, GENERATE_EDGE); yellow.userData.dz = -yellowSpeed; break;
+                    case 3: yellow.position.set(rand, 0, -GENERATE_EDGE); yellow.userData.dz = yellowSpeed; break;
+                }
+                scene.add(yellow);
+                yellowObstacles.push(yellow);
+                const hitbox = createHitbox(yellow, 0xffff00);
+                scene.add(hitbox);
+                yellowHitboxes.push(hitbox);
+
+                setTimeout(() => {
+                    if (yellowObstacles.includes(yellow)) {
+                        yellow.material.color.set(0xffa500);
+                        yellow.userData.dx *= 2.5;
+                        yellow.userData.dz *= 2.5;
+                        const idx = yellowObstacles.indexOf(yellow);
+                        if (yellowHitboxes[idx]) yellowHitboxes[idx].material.color.set(0xffa500);
+                    }
+                }, 500);
+            }, i * 2500);
+        }
+    }
+
+    function createSphereObstacle() {
+        if (!gameRunning || gameOver || timeLeft > 15) return;
+        for (let i = 0; i < 3; i++) {
+            setTimeout(() => {
+                if (!gameRunning || gameOver) return;
+                const direction = Math.floor(Math.random() * 4);
+                const rand = Math.random() * PLANE_SIZE - (PLANE_SIZE / 2);
+                let startPos = new THREE.Vector3(), endPos = new THREE.Vector3(), sphereDx = 0, sphereDz = 0;
+                switch (direction) {
+                    case 0: startPos.set(-GENERATE_EDGE, 0, rand); endPos.set(GENERATE_EDGE, 0, rand); sphereDx = sphereSpeed; sphereDz = 0; break;
+                    case 1: startPos.set(GENERATE_EDGE, 0, rand); endPos.set(-GENERATE_EDGE, 0, rand); sphereDx = -sphereSpeed; sphereDz = 0; break;
+                    case 2: startPos.set(rand, 0, GENERATE_EDGE); endPos.set(rand, 0, -GENERATE_EDGE); sphereDx = 0; sphereDz = -sphereSpeed; break;
+                    case 3: startPos.set(rand, 0, -GENERATE_EDGE); endPos.set(rand, 0, GENERATE_EDGE); sphereDx = 0; sphereDz = sphereSpeed; break;
+                }
+
+                const lineMaterial = new THREE.LineBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0.8 });
+                const points = [startPos.clone(), endPos];
+                const lineGeometry = new THREE.BufferGeometry().setFromPoints(points);
+                const line = new THREE.Line(lineGeometry, lineMaterial);
+                scene.add(line);
+                lines.push(line);
+
+                setTimeout(() => {
+                    if (lines.includes(line)) {
+                        scene.remove(line);
+                        const idx = lines.indexOf(line);
+                        if (idx > -1) lines.splice(idx, 1);
+                    }
+
+                    const geometry = new THREE.SphereGeometry(0.4, 16, 16);
+                    const material = new THREE.MeshStandardMaterial({ color: 0xffa500 });
+                    const sphere = new THREE.Mesh(geometry, material);
+                    sphere.castShadow = true;
+                    sphere.position.copy(startPos);
+                    sphere.scale.set(OBJECT_SCALE, OBJECT_SCALE, OBJECT_SCALE);
+                    sphere.userData = { dx: sphereDx, dz: sphereDz };
+                    scene.add(sphere);
+                    sphereObstacles.push(sphere);
+                    const hitbox = createHitbox(sphere, 0xffa500);
+                    scene.add(hitbox);
+                    sphereHitboxes.push(hitbox);
+                }, 1000);
+            }, i * 333);
+        }
+    }
+
+    function createHitbox(mesh, color = 0xffff00, scale = 0.9) {
+        const box = new THREE.Box3().setFromObject(mesh);
+        const size = box.getSize(new THREE.Vector3());
+        const geometry = new THREE.BoxGeometry(size.x * scale, size.y * scale, size.z * scale);
+        const material = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.3, wireframe: true });
+        const hitbox = new THREE.Mesh(geometry, material);
+        hitbox.position.copy(mesh.position);
+        hitbox.rotation.copy(mesh.rotation);
+        return hitbox;
+    }
+
+    function checkCollision(playerHitbox, obsBox) {
+        const playerBox = new THREE.Box3().setFromObject(playerHitbox);
+        if (playerBox.intersectsBox(obsBox)) endGame('撞到障礙物！');
+    }
+
+    function updateObstacles() {
+        for (let i = obstacles.length - 1; i >= 0; i--) {
+            const obs = obstacles[i];
+            obs.position.x += obs.userData.dx;
+            obs.position.z += obs.userData.dz;
+            obs.rotation.y += 0.03;
+            obstacleHitboxes[i].position.copy(obs.position);
+            obstacleHitboxes[i].rotation.copy(obs.rotation);
+
+            const obsBox = new THREE.Box3().setFromObject(obs);
+            players.forEach(p => checkCollision(p.hitbox, obsBox));
+
+            if (Math.abs(obs.position.x) > GENERATE_EDGE || Math.abs(obs.position.z) > GENERATE_EDGE) {
+                scene.remove(obs);
+                scene.remove(obstacleHitboxes[i]);
+                obstacles.splice(i, 1);
+                obstacleHitboxes.splice(i, 1);
+            }
+        }
+    }
+
+    function updateYellowObstacles() {
+        for (let i = yellowObstacles.length - 1; i >= 0; i--) {
+            const obs = yellowObstacles[i];
+            obs.position.x += obs.userData.dx;
+            obs.position.z += obs.userData.dz;
+            obs.rotation.y += 0.04;
+            yellowHitboxes[i].position.copy(obs.position);
+            yellowHitboxes[i].rotation.copy(obs.rotation);
+
+            const obsBox = new THREE.Box3().setFromObject(obs);
+            players.forEach(p => checkCollision(p.hitbox, obsBox));
+
+            if (Math.abs(obs.position.x) > GENERATE_EDGE || Math.abs(obs.position.z) > GENERATE_EDGE) {
+                scene.remove(obs);
+                scene.remove(yellowHitboxes[i]);
+                yellowObstacles.splice(i, 1);
+                yellowHitboxes.splice(i, 1);
+            }
+        }
+    }
+
+    function updateSphereObstacles() {
+        for (let i = sphereObstacles.length - 1; i >= 0; i--) {
+            const obs = sphereObstacles[i];
+            obs.position.x += obs.userData.dx;
+            obs.position.z += obs.userData.dz;
+            sphereHitboxes[i].position.copy(obs.position);
+
+            const obsBox = new THREE.Box3().setFromObject(obs);
+            players.forEach(p => checkCollision(p.hitbox, obsBox));
+
+            if (Math.abs(obs.position.x) > GENERATE_EDGE || Math.abs(obs.position.z) > GENERATE_EDGE) {
+                scene.remove(obs);
+                scene.remove(sphereHitboxes[i]);
+                sphereObstacles.splice(i, 1);
+                sphereHitboxes.splice(i, 1);
+            }
+        }
+    }
+
+    function endGame(msg = '遊戲結束！') {
+        if (gameOver) return;
+        gameOver = true;
+        gameRunning = false;
+        clearInterval(timerInterval);
+        statusEl.textContent = `${msg}`;
+        gameOverEl.textContent = 'Game Over!';
+        gameOverEl.style.color = '#ff4444';
+        gameOverEl.style.display = 'block';
+        pauseBtn.disabled = true;
+        players.forEach(p => { 
+            p.hpContainer.style.display = 'none'; 
+            stopDamage(p); 
+            stopRecover(p); 
+        });
+    }
+
+    function winGame() {
+        gameOver = true;
+        gameRunning = false;
+        clearInterval(timerInterval);
+        statusEl.textContent = `雙人勝利！`;
+        gameOverEl.textContent = 'You Both Win!';
+        gameOverEl.style.color = '#00ff88';
+        gameOverEl.style.display = 'block';
+        pauseBtn.disabled = true;
+        players.forEach(p => p.hpContainer.style.display = 'none');
+    }
+
+    // 暫停/繼續
+    function togglePause() {
+        if (gameOver) return;
+        gameRunning = !gameRunning;
+        if (gameRunning) {
+            timerInterval = setInterval(() => {
+                timeLeft--;
+                timerEl.textContent = `剩餘時間: ${timeLeft}`;
+                if (timeLeft <= 0) winGame();
+            }, 1000);
+            pauseBtn.textContent = '暫停遊戲';
+            statusEl.textContent = '遊戲繼續！';
+        } else {
+            clearInterval(timerInterval);
+            pauseBtn.textContent = '繼續遊戲';
+            statusEl.textContent = '遊戲暫停中...';
+        }
+    }
+
+    // Bluetooth 連接
+    async function connectPlayer(num) {
+        try {
+            statusEl.textContent = `搜尋 Player${num} micro:bit...`;
+            const device = await navigator.bluetooth.requestDevice({
+                filters: [{ namePrefix: 'BBC micro:bit' }],
+                optionalServices: [UART_SERVICE_UUID]
+            });
+            const server = await device.gatt.connect();
+            const service = await server.getPrimaryService(UART_SERVICE_UUID);
+            const tx = await service.getCharacteristic(UART_TX_UUID);
+            await tx.startNotifications();
+            tx.addEventListener('characteristicvaluechanged', (e) => handleData(e, num-1));
+            
+            if (num === 1) { device1 = device; connectBtn1.disabled = true; disconnectBtn1.disabled = false; }
+            if (num === 2) { device2 = device; connectBtn2.disabled = true; disconnectBtn2.disabled = false; }
+            statusEl.textContent = `Player${num} 已連接`;
+        } catch (err) {
+            statusEl.textContent = `Player${num} 連接失敗: ${err.message}`;
+        }
+    }
+
+    function disconnectPlayer(num) {
+        const dev = num === 1 ? device1 : device2;
+        if (dev && dev.gatt.connected) dev.gatt.disconnect();
+        if (num === 1) { device1 = null; connectBtn1.disabled = false; disconnectBtn1.disabled = true; }
+        if (num === 2) { device2 = null; connectBtn2.disabled = false; disconnectBtn2.disabled = true; }
+        statusEl.textContent = `Player${num} 已斷開`;
+    }
+
+    function handleData(event, playerIdx) {
+        const data = new Uint8Array(event.target.value.buffer);
+        const str = new TextDecoder().decode(data).trim();
+        if (str.includes('+')) {
+            const [xStr, yStr] = str.split('+');
+            const x = parseInt(xStr), y = parseInt(yStr);
+            if (!isNaN(x) && !isNaN(y)) {
+                players[playerIdx].dx = Math.abs(x) < 100 ? 0 : (x / 1024) * maxSpeed;
+                players[playerIdx].dz = Math.abs(y) < 100 ? 0 : (y / 1024) * maxSpeed;
+            }
+        }
+    }
+
+    // 重置遊戲
+    function resetGame() {
+        gameRunning = true; 
+        gameOver = false;
+        timeLeft = 45;
+        timerEl.textContent = '剩餘時間: 45';
+        gameOverEl.style.display = 'none';
+        gameOverEl.textContent = 'Game Over!';
+        gameOverEl.style.color = '#ff4444';
+        
+        clearInterval(timerInterval);
+        timerInterval = setInterval(() => {
+            timeLeft--;
+            timerEl.textContent = `剩餘時間: ${timeLeft}`;
+            if (timeLeft <= 0) winGame();
+        }, 1000);
+
+        pauseBtn.disabled = false;
+        pauseBtn.textContent = '暫停遊戲';
+
+        // 重置玩家
+        players.forEach((p, i) => {
+            p.hp = 100; 
+            p.dx = 0; 
+            p.dz = 0;
+            p.cube.position.set(i === 0 ? -1.5 : 1.5, 0, 0);
+            p.hitbox.position.copy(p.cube.position);
+            stopDamage(p); 
+            stopRecover(p); 
+            p.leftEdgeTime = 0;
+            updateHpBar(p);
+            p.hpContainer.style.display = 'block';
+        });
+
+        // 清理障礙物
+        obstacles.forEach(o => scene.remove(o)); obstacles = [];
+        yellowObstacles.forEach(o => scene.remove(o)); yellowObstacles = [];
+        sphereObstacles.forEach(o => scene.remove(o)); sphereObstacles = [];
+        obstacleHitboxes.forEach(h => scene.remove(h)); obstacleHitboxes = [];
+        yellowHitboxes.forEach(h => scene.remove(h)); yellowHitboxes = [];
+        sphereHitboxes.forEach(h => scene.remove(h)); sphereHitboxes = [];
+        lines.forEach(l => scene.remove(l)); lines = [];
+
+        statusEl.textContent = '雙人遊戲開始！45秒存活挑戰！';
+    }
+
+    // 鍵盤事件
+    document.addEventListener('keydown', e => { 
+        const key = e.key.toLowerCase();
+        if (keys.hasOwnProperty(key)) keys[key] = true; 
+    });
+    document.addEventListener('keyup', e => { 
+        const key = e.key.toLowerCase();
+        if (keys.hasOwnProperty(key)) keys[key] = false; 
+    });
+
+    // 定時生成障礙物
+    setInterval(createObstacle, 1000);
+    setInterval(createYellowObstacle, 1000);
+    setInterval(createSphereObstacle, 1500);
+
+    // 按鈕事件
+    startBtn.onclick = resetGame;
+    pauseBtn.onclick = togglePause;
+    connectBtn1.onclick = () => connectPlayer(1);
+    disconnectBtn1.onclick = () => disconnectPlayer(1);
+    connectBtn2.onclick = () => connectPlayer(2);
+    disconnectBtn2.onclick = () => disconnectPlayer(2);
+
+    // 啟動！
+    init3D();
+    </script>
+<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'99cc0b54aaa108dd',t:'MTc2Mjg0NTgwNy4wMDAwMDA='};var a=document.createElement('script');a.nonce='';a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script><script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'99cc0ca91a2f06e4',t:'MTc2Mjg0NTg2MS4wMDAwMDA='};var a=document.createElement('script');a.nonce='';a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+</html>
